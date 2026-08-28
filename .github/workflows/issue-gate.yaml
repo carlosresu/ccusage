@@ -59,7 +59,7 @@ jobs:
         id: judge
         if: steps.access.outcome == 'success' && steps.access.outputs.skip != 'true'
         continue-on-error: true
-        uses: pullfrog/pullfrog@c4d0ca6f15d12382ddd20d2010bc596b405f42f0 # v0.1.60
+        uses: pullfrog/pullfrog@bf57b3d2b1cdcfb22ad76b918a0f3f392c6c7f2b # v0.1.62
         with:
           prompt: ${{ steps.request.outputs.prompt }}
           timeout: 15m
@@ -165,7 +165,7 @@ jobs:
 
       - name: Ask Pullfrog to implement the issue
         id: pullfrog
-        uses: pullfrog/pullfrog@c4d0ca6f15d12382ddd20d2010bc596b405f42f0 # v0.1.60
+        uses: pullfrog/pullfrog@bf57b3d2b1cdcfb22ad76b918a0f3f392c6c7f2b # v0.1.62
         with:
           prompt: ${{ needs.apply.outputs.prompt }}
           timeout: 1h
