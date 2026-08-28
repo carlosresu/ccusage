@@ -384,6 +384,9 @@ fn is_valid_daily_usage_entry(data: &DailyUsageEntry) -> bool {
     {
         return false;
     }
+    if data.request_id.is_none() && !super::has_completed_usage(data.message.usage) {
+        return false;
+    }
     true
 }
 fn daily_usage_token_total(entry: &DailyLoadedEntry) -> u64 {
@@ -448,6 +451,14 @@ fn should_replace_deduped_daily_entry(
     let existing_is_sidechain = is_sidechain_daily_entry(existing);
     if candidate_is_sidechain != existing_is_sidechain {
         return existing_is_sidechain;
+    }
+
+    if candidate.request_id.is_none() {
+        let candidate_is_completed = super::has_completed_usage(candidate.usage);
+        let existing_is_completed = super::has_completed_usage(existing.usage);
+        if candidate_is_completed != existing_is_completed {
+            return candidate_is_completed;
+        }
     }
 
     let candidate_total = daily_usage_token_total(candidate);
@@ -545,7 +556,7 @@ impl DailyAccumulator {
 mod tests {
     use std::sync::Arc;
 
-    use super::{DailyLoadedEntry, push_deduped_daily_entry};
+    use super::{DailyLoadedEntry, is_valid_daily_usage_entry, push_deduped_daily_entry};
     use crate::TokenUsageRaw;
 
     #[test]
@@ -607,6 +618,52 @@ mod tests {
         .into_entry();
 
         assert_eq!(data.is_sidechain, Some(true));
+    }
+
+    #[test]
+    fn keeps_completed_daily_usage_over_larger_provisional_usage_without_request_id() {
+        let mut deduped_indexes = Default::default();
+        let mut deduped = Vec::new();
+        let mut provisional = daily_loaded_entry(DailyEntryFixture {
+            message_id: "msg-raine",
+            request_id: "unused",
+            is_sidechain: false,
+            cache_read_tokens: 0,
+            output_tokens: 0,
+        });
+        provisional.request_id = None;
+        provisional.model = Some("gpt-5.6-terra".to_string());
+        provisional.usage.input_tokens = 73_628;
+
+        let mut completed = daily_loaded_entry(DailyEntryFixture {
+            message_id: "msg-raine",
+            request_id: "unused",
+            is_sidechain: false,
+            cache_read_tokens: 65_280,
+            output_tokens: 42,
+        });
+        completed.request_id = None;
+        completed.model = Some("gpt-5.6-terra".to_string());
+        completed.usage.input_tokens = 380;
+
+        push_deduped_daily_entry(provisional, &mut deduped_indexes, &mut deduped);
+        push_deduped_daily_entry(completed, &mut deduped_indexes, &mut deduped);
+
+        assert_eq!(deduped.len(), 1);
+        assert_eq!(deduped[0].usage.input_tokens, 380);
+        assert_eq!(deduped[0].usage.cache_read_input_tokens, 65_280);
+        assert_eq!(deduped[0].usage.output_tokens, 42);
+    }
+
+    #[test]
+    fn rejects_provisional_daily_usage_without_request_id() {
+        let data = serde_json::from_str::<super::DailyUsageLine>(
+            r#"{"timestamp":"2026-08-28T08:00:00.000Z","sessionId":"session-a","version":"2.1.250","message":{"id":"msg-raine","model":"gpt-5.6-terra","usage":{"input_tokens":73628,"output_tokens":0}}}"#,
+        )
+        .unwrap()
+        .into_entry();
+
+        assert!(!is_valid_daily_usage_entry(&data));
     }
 
     struct DailyEntryFixture {

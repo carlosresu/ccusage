@@ -123,11 +123,25 @@ fn usage_token_total(data: &UsageEntry) -> u64 {
         + usage.cache_read_input_tokens
 }
 
+fn has_completed_usage(usage: TokenUsageRaw) -> bool {
+    usage.output_tokens > 0
+        || usage.cache_creation_token_count() > 0
+        || usage.cache_read_input_tokens > 0
+}
+
 fn should_replace_deduped_entry(candidate: &UsageEntry, existing: &UsageEntry) -> bool {
     let candidate_is_sidechain = is_sidechain_usage_entry(candidate);
     let existing_is_sidechain = is_sidechain_usage_entry(existing);
     if candidate_is_sidechain != existing_is_sidechain {
         return existing_is_sidechain;
+    }
+
+    if candidate.request_id.is_none() {
+        let candidate_is_completed = has_completed_usage(candidate.message.usage);
+        let existing_is_completed = has_completed_usage(existing.message.usage);
+        if candidate_is_completed != existing_is_completed {
+            return candidate_is_completed;
+        }
     }
 
     let candidate_total = usage_token_total(candidate);
@@ -449,6 +463,9 @@ fn is_valid_usage_entry(data: &UsageEntry) -> bool {
     {
         return false;
     }
+    if data.request_id.is_none() && !has_completed_usage(data.message.usage) {
+        return false;
+    }
     true
 }
 
@@ -561,8 +578,8 @@ mod tests {
     use std::{path::Path, sync::Arc};
 
     use super::{
-        extract_session_parts, has_unsupported_null_field, paths::is_project_path_segment,
-        push_deduped_entry, read_usage_file, usage_files,
+        extract_session_parts, has_unsupported_null_field, is_valid_usage_entry,
+        paths::is_project_path_segment, push_deduped_entry, read_usage_file, usage_files,
     };
     use crate::{
         LoadedEntry, PricingMap, TimestampMs, TokenUsageRaw, UsageEntry, UsageMessage,
@@ -779,6 +796,56 @@ mod tests {
         assert_eq!(deduped.len(), 1);
         assert_eq!(deduped[0].data.request_id.as_deref(), Some("req-parent"));
         assert_eq!(deduped[0].data.message.usage.cache_read_input_tokens, 20);
+    }
+
+    #[test]
+    fn keeps_completed_usage_over_larger_provisional_usage_without_request_id() {
+        let mut deduped_indexes = Default::default();
+        let mut deduped = Vec::new();
+        let mut provisional = loaded_usage_entry(UsageEntryFixture {
+            message_id: "msg-raine",
+            request_id: "unused",
+            is_sidechain: false,
+            cache_read_tokens: 0,
+            output_tokens: 0,
+        });
+        provisional.data.request_id = None;
+        provisional.data.message.model = Some("gpt-5.6-terra".to_string());
+        provisional.data.message.usage.input_tokens = 73_628;
+        provisional.model = Some("gpt-5.6-terra".to_string());
+
+        let mut completed = loaded_usage_entry(UsageEntryFixture {
+            message_id: "msg-raine",
+            request_id: "unused",
+            is_sidechain: false,
+            cache_read_tokens: 65_280,
+            output_tokens: 42,
+        });
+        completed.data.request_id = None;
+        completed.data.message.model = Some("gpt-5.6-terra".to_string());
+        completed.data.message.usage.input_tokens = 380;
+        completed.model = Some("gpt-5.6-terra".to_string());
+
+        push_deduped_entry(provisional, &mut deduped_indexes, &mut deduped);
+        push_deduped_entry(completed, &mut deduped_indexes, &mut deduped);
+
+        assert_eq!(deduped.len(), 1);
+        assert_eq!(deduped[0].data.message.usage.input_tokens, 380);
+        assert_eq!(
+            deduped[0].data.message.usage.cache_read_input_tokens,
+            65_280
+        );
+        assert_eq!(deduped[0].data.message.usage.output_tokens, 42);
+    }
+
+    #[test]
+    fn rejects_provisional_usage_without_request_id() {
+        let data = serde_json::from_str::<UsageEntry>(
+            r#"{"timestamp":"2026-08-28T08:00:00.000Z","sessionId":"session-a","version":"2.1.250","message":{"id":"msg-raine","model":"gpt-5.6-terra","usage":{"input_tokens":73628,"output_tokens":0}}}"#,
+        )
+        .unwrap();
+
+        assert!(!is_valid_usage_entry(&data));
     }
 
     struct UsageEntryFixture {
